@@ -1,0 +1,18 @@
+# Secrets — never commit the HF token (ROADMAP §8)
+.env
+
+# Source audio corpora (large; downloaded, not authored here)
+wav48/
+fsd50k_data/
+
+# Generated scenes, cached features, resampled 16 kHz audio (ROADMAP §9)
+data/
+
+# Python junk
+__pycache__/
+*.pyc
+.DS_Store
+
+# Model checkpoints
+*.ckpt
+*.pt

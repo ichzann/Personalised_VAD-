@@ -1,0 +1,11 @@
+# Phase 0 core dependencies (Apple Silicon / CPU only).
+# The frozen backbone (pyannote vs SpeechBrain+Silero) is a Phase 2 decision
+# (ROADMAP §7) and is intentionally NOT pinned here yet.
+torch
+torchaudio
+numpy
+scipy
+soundfile
+matplotlib
+tqdm
+python-dotenv
