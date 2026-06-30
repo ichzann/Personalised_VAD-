@@ -4,7 +4,7 @@
 > writing code or proposing changes. If a decision here is wrong or outdated,
 > update *this file* in the same change — do not let code and roadmap drift apart.
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 ---
 
@@ -98,6 +98,17 @@ single number. Corollary for the real-mic goal (§2): the model only learns to r
 the overlaps it saw, so the synthesis distribution (TIR range, #interferers, reverb)
 must span real rooms or the rejection won't transfer.
 
+**The TIR range must be two-sided** (decided: `tir_db ∈ [-12, +12]`, one draw per
+scene). Positive dB = interferer quieter than the target; negative dB = interferer
+*louder* than the target. A one-sided range (target always ≥ interferer) leaks a
+loudness shortcut: the head can learn "loudest speaker = target" and skip the
+enrollment-embedding comparison entirely — which then fails on real mics where the
+target may sit farther from the mic. Letting the target be the quieter speaker in
+some scenes makes that rule wrong ~half the time, so it can't be learned, while a
+single TIR per scene keeps the F1-vs-TIR curve well-defined. (Time-*varying* level
+within a scene is deliberately **not** done here — it would give a scene multiple
+TIRs and blur the curve; per-utterance level jitter is deferred to Phase 5, §7.)
+
 **Mel pathway (decided): a small 1D CNN over frequency.**
 For each frame, run a tiny `Conv1d` over the mel/frequency bins (1–2 layers, a few
 filters) to extract the local spectral pattern that signals overlap, then flatten to
@@ -107,12 +118,17 @@ streaming. The LSTM does all the temporal modelling. Keep it plain `Conv1d` — 
 convs, no depthwise-separable / MobileNet tricks (see §8: simplicity first).
 
 **Windowing / sizing.**
-Speaker embeddings need context: use a sliding window ~1–1.5 s long with a small hop
-(~0.1–0.25 s) for `e[t]` — many embeddings, each still reliable (shorter than ~0.5 s
-and the embedding becomes noise, not signal). The mel / `m[t]` stream is finer
-(~10–30 ms frames). Align both onto one common frame grid before building `x[t]`
-(hold/repeat the coarse embedding across the fine grid). Window length vs hop is an
-ablation (§6 Phase 5).
+Speaker embeddings need context: use a sliding window for `e[t]` with a small hop
+(~0.1–0.25 s) — many embeddings, each still reliable (shorter than ~0.5 s and the
+embedding becomes noise, not signal). The small hop is correct *for us* because we
+emit a per-frame timeline, not one embedding per segment (clustering diarization).
+The **window length** is the real knob: the diarization literature's offline default
+is **~3.0 s** (e.g. ECAPA on AMI), while ~1.0 s is favored only for streaming /
+end-to-end tracking. Since we are offline-first, the window ablation must span
+**{1.0, 1.5, 3.0} s** (do not stop at 1.5 s — too short costs identity stability).
+The mel / `m[t]` stream is finer (~10–30 ms frames). Align both onto one common frame
+grid before building `x[t]` (hold/repeat the coarse embedding across the fine grid).
+Window length vs hop is an ablation (§6 Phase 5).
 
 **Frozen backbone — two viable options (pick one in Phase 2):**
 - **`pyannote.audio`** — pretrained segmentation incl. *overlapped-speech detection*
@@ -145,6 +161,18 @@ same sentences — avoid pairing identical sentence text across target/interfere
    overlaps — the **target appears in the dialog** alongside interferers. Sample the
    target-to-interferer gain (TIR, §3-C) for overlap regions. Record exact
    boundaries → frame-level **4-class** label array.
+   - *Turn-taking:* a speaker **may take consecutive gapped turns** (real dialog has
+     multi-sentence turns; rigid no-repeat alternation is an unnatural grammar a
+     sequence head could exploit). The one exception is **overlaps must switch
+     speaker** — a speaker overlapping themselves sums two clips of one voice, which
+     gets mislabeled single-speaker yet looks like overlap to the mel branch.
+     `target_turn_prob` keeps a mild target bias so target-only stays well-sampled.
+   - *Overlap as a measured ratio:* overlap is controlled by a per-turn probability,
+     but the quantity the literature reports and matches to the target domain is the
+     **realized overlap ratio** (overlapped-speech time ÷ total speech time; real
+     dialog ≈ 10–35%, CHiME-6 ~34%). So **log it per scene in `meta`** and check the
+     dataset lands in a realistic band — same measure-don't-assume stance as the
+     F1-vs-TIR curve (§3-C). Sweepable later as an F1-vs-overlap-ratio ablation.
 4. (For real-mic realism) convolve each speaker with a **room impulse response**;
    same room per scene, different positions per speaker. RIRs via `pyroomacoustics`
    (synthetic) or a recorded RIR set.
@@ -195,8 +223,9 @@ same sentences — avoid pairing identical sentence text across target/interfere
   false-trigger rate.
 
 - **Phase 5 — Overlap & robustness.** Improve the `overlap` class; add RIR/noise
-  augmentation; ablations (enrollment length 3/5/10/20 s, window/hop size, ± 1D-CNN
-  mel feature, ± OSD cue, F1-vs-TIR curve). *Done when:* you have an ablation table.
+  augmentation; ablations (enrollment length 3/5/10/20 s, embedding window {1.0/1.5/
+  3.0 s} × hop, ± 1D-CNN mel feature, ± OSD cue, F1-vs-TIR curve, F1-vs-overlap-ratio).
+  *Done when:* you have an ablation table.
 
 - **Phase 6 — Real-data validation.** Record/collect ~10–20 min of real single-mic
   dialog, hand-label, evaluate, analyze the synthetic→real gap. *Done when:* you
@@ -235,6 +264,15 @@ same sentences — avoid pairing identical sentence text across target/interfere
 - How to source RIRs for "real single mic" realism (synthetic `pyroomacoustics`
   vs recorded RIR corpus) — decide before Phase 5.
 - Decision-threshold target (favor low false-trigger or low miss) — set in Phase 5.
+- Per-utterance / time-varying **level jitter** within a scene (robustness against a
+  fixed per-file loudness) — deferred to Phase 5 augmentation. Phase 1 uses a single
+  two-sided TIR per scene (§3-C) to keep the F1-vs-TIR curve clean.
+- **Scene length is ~20–40 s, vs the 2–4 min "simulated conversations" in the
+  diarization literature** — a conscious, scope-justified divergence: we train on
+  cropped ~5–10 s windows, target single-mic *dialog* (not meetings), and are
+  CPU-only. The implication is that training-audio volume and turn variety must come
+  from generating **many short scenes**, not a few long ones. Revisit (allow up to
+  ~60 s) only if longer-range turn dynamics prove to matter.
 
 ## 8. Conventions & guardrails (for humans and LLMs)
 
@@ -247,6 +285,12 @@ same sentences — avoid pairing identical sentence text across target/interfere
 > accuracy/speed gain.
 
 **Do:**
+- **The author writes the real source files; the assistant only writes `*_example`
+  reference versions** (e.g. `src/foo_example.py`, not `src/foo.py`). This is a
+  learning project — the author re-implements each file line by line while studying
+  the example. Run the `_example` file when code must be executed to verify a phase.
+  Docs/config (this file, `METRICS.md`, `requirements.txt`, `.gitignore`) are written
+  normally.
 - Write **simple, explainable** code (see banner)
 - Keep all audio at **16 kHz mono**; resample at ingestion, not ad hoc.
 - Keep heavy pretrained nets **frozen**; only the head trains. Cache features.

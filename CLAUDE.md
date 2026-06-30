@@ -32,6 +32,16 @@ of scope.
   upgrade it to a 2D CNN or depthwise-separable/MobileNet tricks without a measured
   gain.
 
+## The author writes the real code — you write `*_example` reference files
+This is a **learning project**: the author types the actual source line by line
+while studying it. So **never create or edit the real source file** (e.g.
+`src/foo.py`). Instead, write a fully-working reference implementation alongside it
+with an `_example` suffix (e.g. `src/foo_example.py`). Same rules: simple,
+explainable, runnable. The author reads it and re-implements the real file
+themselves. When you need to run code to verify a phase, run the `_example` file.
+(Docs/config like `ROADMAP.md`, `METRICS.md`, `requirements.txt`, `.gitignore` are
+not "code to study" — write those normally.)
+
 ## Coding style (learning / portfolio project)
 Keep code **simple and explainable** — the author must be able to read and defend
 every line in a portfolio review. Prefer plain, straightforward Python over clever
