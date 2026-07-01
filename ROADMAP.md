@@ -130,11 +130,14 @@ The mel / `m[t]` stream is finer (~10–30 ms frames). Align both onto one commo
 grid before building `x[t]` (hold/repeat the coarse embedding across the fine grid).
 Window length vs hop is an ablation (§6 Phase 5).
 
-**Frozen backbone — two viable options (pick one in Phase 2):**
-- **`pyannote.audio`** — pretrained segmentation incl. *overlapped-speech detection*
-  + speaker embeddings. Directly helps the overlap problem. Needs the HF token.
-- **SpeechBrain ECAPA-TDNN** (speaker embeddings) **+ Silero VAD**. Lighter, no OSD
-  out of the box (overlap learned by the head from features).
+**Frozen backbone — DECIDED in Phase 2: SpeechBrain ECAPA-TDNN + Silero VAD.**
+- **SpeechBrain ECAPA-TDNN** (speaker embeddings) **+ Silero VAD** ✅ *chosen*.
+  Lighter on CPU, pip-installable, no HF token. No OSD out of the box — overlap is
+  learned by the head from the mel pathway (§3-B). Implemented in
+  `src/features/extract_features_example.py`.
+- `pyannote.audio` (rejected for now) — pretrained segmentation incl. *overlapped-
+  speech detection* + embeddings; directly helps overlap but heavier and needs the
+  HF token. Revisit only if the mel-learned overlap class underperforms in Phase 5.
 
 ## 4. Data
 
@@ -256,7 +259,8 @@ same sentences — avoid pairing identical sentence text across target/interfere
 
 ## 7. Open questions / deferred decisions
 
-- Exact backbone (pyannote vs SpeechBrain+Silero) — decide in Phase 2.
+- ~~Exact backbone (pyannote vs SpeechBrain+Silero) — decide in Phase 2.~~
+  **Resolved (Phase 2): SpeechBrain ECAPA-TDNN + Silero VAD** (see §3).
 - Speaker count / split sizes — confirm whether all 109 VCTK speakers or a subset.
 - Number of interferers N and overlap-rate distribution — tune in Phase 1/5.
 - Whether `other-only` and `overlap` stay separate classes or merge — revisit if

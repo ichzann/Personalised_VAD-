@@ -9,9 +9,11 @@ Design choices, all in the name of simplicity (ROADMAP §8):
   finds the true speech onset/offset. We do NOT pull in a VAD model here (that's a
   Phase 2 backbone decision). ALL timing/labels come from these trimmed extents,
   never raw file boundaries (ROADMAP §4 step 1).
-- **No noise bed, no reverb yet.** A dry mixture keeps the labels visibly matching
-  the audio for the Phase 1 milestone; noise/RIR augmentation is Phase 5. The config
-  knobs are here so Phase 5 only adds, never restructures.
+- **Noise bed is optional (Phase 5).** Pass `noise_files` to mix a scene-length
+  FSD50K bed at a sampled SNR; omit it for the dry Phase 1 mixture (labels visibly
+  match the audio). Reverb/RIR is still Phase 5 future work. The noise is drawn
+  *after* all dialog placement, so one seed gives the SAME dialog with or without
+  noise — a clean and a noisy cache differ only by the bed.
 - **Labels on a fixed 10 ms grid.** Phase 2 aligns its feature grid to this.
 
 Everything random flows from one seeded numpy Generator, so a seed fully determines
@@ -46,6 +48,8 @@ class SceneConfig:
     tir_db_range: tuple = (-12.0, 12.0)     # target-to-interferer ratio (§3-C dial)
     target_turn_prob: float = 0.5           # how often the target takes a turn
     ref_rms: float = 0.06                   # each utterance normalized to this RMS
+    snr_db_range: tuple = (5.0, 20.0)       # speech-to-noise ratio when a bed is added (Phase 5)
+    noise_crossfade_s: float = 0.1          # crossfade when concatenating short noise clips
     n_enroll: int = 20                      # target utterances reserved for enrollment
     # Energy trim: keep frames within TRIM_DB of the utterance's peak RMS.
     trim_db: float = 30.0
@@ -103,6 +107,46 @@ def _sentence_id(path: Path) -> str:
 
 
 # ----------------------------------------------------------------------------- #
+# Background noise bed (Phase 5, ROADMAP §4 step 5)
+# ----------------------------------------------------------------------------- #
+
+def _rms(signal: np.ndarray) -> float:
+    """Root-mean-square level of a signal (with a tiny floor to avoid /0)."""
+    return float(np.sqrt(np.mean(signal.astype(np.float64) ** 2) + 1e-12))
+
+
+def _crossfade_concat(a: np.ndarray, b: np.ndarray, fade: int) -> np.ndarray:
+    """Concatenate two mono signals with a short linear crossfade (hides the seam)."""
+    if len(a) == 0:
+        return b.copy()
+    fade = min(fade, len(a), len(b))
+    if fade == 0:
+        return np.concatenate([a, b])
+    ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+    blended = a[-fade:] * (1.0 - ramp) + b[:fade] * ramp
+    return np.concatenate([a[:-fade], blended, b[fade:]])
+
+
+def build_noise_bed(rng, length: int, noise_files: list, cfg: SceneConfig) -> np.ndarray:
+    """Build a scene-length mono noise bed from FSD50K clips.
+
+    Clips are shorter than a scene, so we concatenate random ones with small
+    crossfades (no clicks at the seams, ROADMAP §4 step 5) until the bed is long
+    enough, then trim to exactly `length`. All picks come from the seeded rng.
+    """
+    fade = int(cfg.noise_crossfade_s * SR)
+    bed = np.zeros(0, dtype=np.float32)
+    while len(bed) < length:
+        path = noise_files[int(rng.integers(len(noise_files)))]
+        clip, sr = sf.read(str(path), dtype="float32")
+        assert sr == SR, f"{path} is {sr} Hz, expected {SR} (run resample first)"
+        if clip.ndim > 1:                  # fold any stray stereo clip to mono
+            clip = clip.mean(axis=1).astype(np.float32)
+        bed = _crossfade_concat(bed, clip, fade)
+    return bed[:length]
+
+
+# ----------------------------------------------------------------------------- #
 # Scene synthesis
 # ----------------------------------------------------------------------------- #
 
@@ -113,8 +157,13 @@ def _pick_speakers(rng, split_speakers: list[str], n_interferers: int):
     return chosen[0], chosen[1:]
 
 
-def synthesize_scene(seed: int, split_speakers: list[str], cfg: SceneConfig = None):
-    """Build one labeled scene. Returns (wav float32, labels int array, meta dict)."""
+def synthesize_scene(seed: int, split_speakers: list[str], cfg: SceneConfig = None,
+                     noise_files: list = None):
+    """Build one labeled scene. Returns (wav float32, labels int array, meta dict).
+
+    Pass `noise_files` (a list of 16 kHz FSD50K wav paths) to add a shared
+    background-noise bed at a sampled SNR (Phase 5). Omit it for a dry scene.
+    """
     cfg = cfg or SceneConfig()
     rng = np.random.default_rng(seed)
 
@@ -201,7 +250,24 @@ def synthesize_scene(seed: int, split_speakers: list[str], cfg: SceneConfig = No
         else:
             other_active[s:e] = True
 
-    # Avoid clipping with a single uniform rescale (does not move any boundary).
+    # Add a shared background-noise bed at a sampled SNR (Phase 5, ROADMAP §4 step 5).
+    # Drawn here — AFTER all dialog placement — so a given seed yields the SAME dialog
+    # with or without noise (clean vs noisy caches differ only by the bed). Noise does
+    # not touch the labels: labels come from speech activity, not energy, so silence
+    # frames stay `silence` even though the bed has energy there (VAD must reject it).
+    snr_db = None
+    if noise_files:
+        snr_db = float(rng.uniform(*cfg.snr_db_range))
+        speech_mask = target_active | other_active
+        if speech_mask.any():
+            speech_rms = _rms(mix[speech_mask])          # level over speech only
+            bed = build_noise_bed(rng, total, noise_files, cfg)
+            target_noise_rms = speech_rms / (10.0 ** (snr_db / 20.0))
+            bed *= target_noise_rms / _rms(bed)          # scale bed to hit the SNR
+            mix = mix + bed.astype(np.float32)
+
+    # Avoid clipping with a single uniform rescale (does not move any boundary, and a
+    # uniform scale leaves the SNR unchanged).
     peak = np.abs(mix).max()
     if peak > 0.99:
         mix *= 0.99 / peak
@@ -219,6 +285,7 @@ def synthesize_scene(seed: int, split_speakers: list[str], cfg: SceneConfig = No
     meta = {
         "seed": seed, "sr": SR, "label_hop": LABEL_HOP,
         "target": target, "interferers": interferers, "tir_db": tir_db,
+        "snr_db": snr_db,  # None for a dry scene; float when a noise bed was added
         "duration_s": total / SR, "n_events": len(events),
         "overlap_ratio": overlap_ratio,
         "enrollment_files": [str(p) for p in enroll_files],

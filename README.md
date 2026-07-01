@@ -1,0 +1,96 @@
+# Target-Person Voice — Personal VAD
+
+Given a short **enrollment** clip of one target person, this project builds a detector
+that listens to a **single-microphone dialog** (several people, overlaps, noise) and
+outputs a **timeline of when the target is speaking alone**. Silence, other speakers,
+and the target overlapping someone else all count as "not target". This is the task the
+literature calls **Personal VAD / Target-Speaker Voice Activity Detection**.
+
+See `ROADMAP.md` for the full design rationale and decisions.
+
+---
+
+## Model architecture
+
+Only a **small head is trained**. The heavy pretrained models are frozen and used just
+to turn audio into features (this keeps it runnable on a CPU / Apple Silicon).
+
+![Model architecture](architecture.png)
+
+*Gray = frozen pretrained nets, green = the trained head, yellow = per-frame features.*
+
+**Frozen feature extractors** (run once, never trained):
+- **Silero VAD** → speech probability per frame.
+- **SpeechBrain ECAPA-TDNN** → a 192-d speaker embedding per short window.
+
+**Per 10 ms frame, the head sees four things:**
+| feature | what it is | why |
+|---|---|---|
+| `logmel` (40) | mel spectrogram of the frame | energy/harmonics → tells overlap from single speaker |
+| `emb` (192) | ECAPA speaker embedding | who is speaking |
+| `cos` (1) | cosine similarity of `emb` to the enrollment embedding `e_target` | *is this the target?* — handed to the model directly |
+| `vad` (1) | Silero speech probability | speech vs silence |
+
+**The trained head:**
+```
+logmel (40) ──1D Conv over frequency (2 layers, per-frame)──▶ m (64)
+emb   (192) ──Linear + ReLU────────────────────────────────▶ e (32)
+cos, vad                                                    ─▶ (2)
+        x = [ m , e , cos , vad ]   (98 per frame)
+        x ──▶ BiLSTM (hidden 64) ──▶ Linear ──▶ 4-class softmax per frame
+```
+The four classes are **{silence, target-only, other-only, overlap}**; "record" =
+`target-only`. A post-processing smoothing step turns the per-frame labels into clean
+target-only segments (the timeline).
+
+The mel Conv1d runs **over frequency within a single frame** (no time mixing), so the
+same code works offline and streaming — the BiLSTM does all the temporal reasoning.
+
+## How the data is built
+
+Real labelled overlap data is scarce, so scenes are **synthesized** and every 10 ms
+frame gets a label for free. Everything is **seeded and deterministic** — a seed fully
+reproduces a scene.
+
+- **Sources:** VCTK (109 clean speakers) resampled to 16 kHz mono; FSD50K for noise.
+- **Speaker-disjoint splits** (~80 / 14 / 15). Test speakers never appear in training,
+  so we measure generalization, not memorization.
+- **Per scene:** pick 1 target + 1–3 interferers from the same split; energy-trim each
+  utterance; lay them on one timeline with gaps, natural turn-taking and deliberate
+  **overlaps**; label each frame 4-class from who is actually active.
+- **Enrollment** uses *different* recordings of the target (no audio reuse → no leakage),
+  averaged into a single `e_target` vector.
+- **Loudness (TIR):** per scene the interferer is scaled to a two-sided ratio
+  (−12…+12 dB) so the model can't cheat with "loudest = target".
+- **Noise:** an FSD50K background bed mixed in at **+5…+20 dB SNR** using held-out noise
+  files (so we never test on noise seen in training).
+
+## Results (val set, speaker-disjoint)
+
+Headline = frame-level **F1 for the `target-only` class** (never bare accuracy —
+silence dominates the frames).
+
+| model | trained on | tested on | target-only F1 |
+|---|---|---|---|
+| cosine-threshold baseline | — | clean | 0.702 |
+| trained head | clean | clean | **0.863** |
+| trained head | clean | noisy | 0.701 |
+| trained head | noisy | noisy | 0.787 |
+| trained head | noisy | clean | 0.816 |
+
+The trained head clearly beats the non-learned baseline, and training with noise makes
+it far more stable across clean/noisy conditions. `overlap` is still the weakest class
+and is the main open problem.
+
+## AI usage
+
+I (the author) **designed the model architecture and the data-synthesis scheme** — the
+4-class formulation, the frozen-backbone + small-head split, the feature set
+(embedding + cosine-to-enrollment + mel + VAD), and how scenes are generated (speaker-
+disjoint splits, two-sided TIR, overlap labelling, noise mixing).
+
+I then let the **AI build essentially all of the implementation**. Along the way I
+broadly reviewed what it produced, and where I spotted **misunderstandings** I pointed
+them out for the AI to fix. So the design decisions are mine; the code is AI-written
+under my review. (This is also a learning project — the AI writes reference `*_example`
+files, and I re-implement the real source by hand while studying them.)

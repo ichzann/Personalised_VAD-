@@ -1,6 +1,4 @@
 # Phase 0 core dependencies (Apple Silicon / CPU only).
-# The frozen backbone (pyannote vs SpeechBrain+Silero) is a Phase 2 decision
-# (ROADMAP §7) and is intentionally NOT pinned here yet.
 torch
 torchaudio
 numpy
@@ -9,3 +7,8 @@ soundfile
 matplotlib
 tqdm
 python-dotenv
+
+# Phase 2 frozen backbone (decided in Phase 2, ROADMAP §7): SpeechBrain ECAPA-TDNN
+# speaker embeddings + Silero VAD. Both run frozen on CPU; no HF token needed.
+speechbrain
+silero-vad
