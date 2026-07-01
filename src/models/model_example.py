@@ -56,7 +56,7 @@ class MelFreqConv(nn.Module):
 
 
 class PersonalVAD(nn.Module):
-    """Mel pathway + embedding projection + BiLSTM + per-frame 4-class classifier."""
+    """Mel pathway + embedding projection + LSTM + per-frame 4-class classifier."""
 
     def __init__(self, emb_proj_dim: int = 32, lstm_hidden: int = 64,
                  mel_filters: int = 8):
@@ -66,8 +66,8 @@ class PersonalVAD(nn.Module):
 
         # x[t] = [ m[t] , proj(e[t]) , s[t] , p_speech[t] ]
         in_dim = self.mel_conv.out_dim + emb_proj_dim + 1 + 1
-        self.lstm = nn.LSTM(in_dim, lstm_hidden, batch_first=True, bidirectional=True)
-        self.classifier = nn.Linear(2 * lstm_hidden, N_CLASSES)
+        self.lstm = nn.LSTM(in_dim, lstm_hidden, batch_first=True, bidirectional=False)
+        self.classifier = nn.Linear(lstm_hidden, N_CLASSES)   # unidirectional -> hidden (not 2*hidden)
 
         # Mel standardization (set from train stats before training, ROADMAP: cache
         # features; here we just normalize them). Buffers travel with the checkpoint.
@@ -84,5 +84,5 @@ class PersonalVAD(nn.Module):
         m = self.mel_conv(mel)                     # (B,T,64)
         e = self.emb_proj(emb)                     # (B,T,32)
         x = torch.cat([m, e, cos.unsqueeze(-1), vad.unsqueeze(-1)], dim=-1)
-        h, _ = self.lstm(x)                        # (B,T,2*hidden)
+        h, _ = self.lstm(x)                        # (B,T,hidden)  unidirectional
         return self.classifier(h)                  # (B,T,4)

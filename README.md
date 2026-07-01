@@ -73,14 +73,31 @@ silence dominates the frames).
 | model | trained on | tested on | target-only F1 |
 |---|---|---|---|
 | cosine-threshold baseline | — | clean | 0.702 |
-| trained head | clean | clean | **0.863** |
-| trained head | clean | noisy | 0.701 |
-| trained head | noisy | noisy | 0.787 |
-| trained head | noisy | clean | 0.816 |
+| LSTM head | clean | clean | **0.844** |
+| LSTM head | clean | noisy | 0.716 |
+| LSTM head | noisy | noisy | 0.787 |
+| LSTM head | noisy | clean | 0.784 |
 
 The trained head clearly beats the non-learned baseline, and training with noise makes
-it far more stable across clean/noisy conditions. `overlap` is still the weakest class
-and is the main open problem.
+it far more stable across clean/noisy conditions (the noise-trained model scores
+0.787 / 0.784 on noisy / clean, vs the clean-trained model collapsing to 0.716 on
+noise). `overlap` is still the weakest class (F1 ≈ 0.3) and is the main open problem.
+
+### Ablation — bidirectionality (LSTM vs BiLSTM)
+
+Same features and training; only the LSTM direction changes (clean, target-only F1):
+
+| architecture | clean→clean F1 | note |
+|---|---|---|
+| **unidirectional LSTM** (primary) | 0.844 | causal → the *same* model works for streaming (Phase 7) |
+| BiLSTM | 0.863 | uses future frames → offline only |
+
+Bidirectionality buys only a small offline gain here (~0.02 under matched training; a
+noisier learning-curve sweep put it higher). With just 20 val scenes that gap isn't
+reliably measurable, so we treat the two as close. We pick the **unidirectional LSTM as
+the primary model** because it is *causal* — the identical architecture runs in the
+Phase-7 streaming setting — at little or no accuracy cost. The BiLSTM stays as an
+offline upper-bound reference (`data/models/personal_vad_bilstm.pt`).
 
 ## AI usage
 
