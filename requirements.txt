@@ -12,3 +12,6 @@ python-dotenv
 # speaker embeddings + Silero VAD. Both run frozen on CPU; no HF token needed.
 speechbrain
 silero-vad
+
+# Phase 6/7 live demo: microphone capture for enrollment + streaming detection.
+sounddevice

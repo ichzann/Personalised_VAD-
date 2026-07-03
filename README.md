@@ -37,14 +37,14 @@ logmel (40) ──1D Conv over frequency (2 layers, per-frame)──▶ m (64)
 emb   (192) ──Linear + ReLU────────────────────────────────▶ e (32)
 cos, vad                                                    ─▶ (2)
         x = [ m , e , cos , vad ]   (98 per frame)
-        x ──▶ BiLSTM (hidden 64) ──▶ Linear ──▶ 4-class softmax per frame
+        x ──▶ LSTM (hidden 64, causal) ──▶ Linear ──▶ 4-class softmax per frame
 ```
 The four classes are **{silence, target-only, other-only, overlap}**; "record" =
 `target-only`. A post-processing smoothing step turns the per-frame labels into clean
 target-only segments (the timeline).
 
 The mel Conv1d runs **over frequency within a single frame** (no time mixing), so the
-same code works offline and streaming — the BiLSTM does all the temporal reasoning.
+same code works offline and streaming — the LSTM does all the temporal reasoning.
 
 ## How the data is built
 
@@ -98,6 +98,28 @@ reliably measurable, so we treat the two as close. We pick the **unidirectional 
 the primary model** because it is *causal* — the identical architecture runs in the
 Phase-7 streaming setting — at little or no accuracy cost. The BiLSTM stays as an
 offline upper-bound reference (`data/models/personal_vad_bilstm.pt`).
+
+### Ablation — hard VAD gate (why VAD is a *feature*, not a filter)
+
+A natural alternative architecture is a **cascade**: filter the dialog through Silero
+first (frames below the speech threshold are declared silence outright) and run a
+3-class head {target-only, other-only, overlap} on the surviving speech frames only.
+We built and trained it (noisy data, gate at 0.5):
+
+| architecture | target-only F1 (noisy) |
+|---|---|
+| VAD as soft input feature (ours) | **0.787** |
+| hard VAD gate → 3-class head | 0.688 |
+| cosine-threshold baseline | 0.700 |
+
+The cascade lost — below even the non-learned baseline — and the reason is measurable
+before training: at threshold 0.5 Silero passes only ~65% of true target-only frames,
+so every gate-rejected target frame is an unrecoverable miss and the cascade's F1 is
+*capped* at ~0.79 even with a perfect head. Feeding the VAD score as one input among
+four instead lets the LSTM overrule VAD mistakes using the mel and embedding evidence
+(the trained model's miss rate is 0.096 vs the cascade's 0.396). This is why the
+architecture treats every frozen output as evidence for the head, never as a hard
+pre-filter.
 
 ## AI usage
 

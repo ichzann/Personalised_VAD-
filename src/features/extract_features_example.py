@@ -55,6 +55,10 @@ class FeatureConfig:
     # 3.0 s} window ablation is Phase 5. Small hop -> many still-reliable embeddings.
     emb_win_s: float = 1.5
     emb_hop_s: float = 0.25
+    # Window placement: "centered" = offline default (0.75 s lookahead);
+    # "trailing" = window ENDS at the frame -> no lookahead, required for the live
+    # demo / streaming (ROADMAP §6 Phase 7). Train on the same mode you run.
+    emb_mode: str = "centered"
     # Enrollment: keep only speech (Silero) before averaging windows into e_target.
     vad_speech_thresh: float = 0.5
 
@@ -163,16 +167,21 @@ def embed_segment(segment: np.ndarray, embedder) -> np.ndarray:
 
 def sliding_embeddings(wav: np.ndarray, embedder, cfg: FeatureConfig,
                        n_frames: int) -> np.ndarray:
-    """Sliding ECAPA embeddings centered on each emb-hop, held onto the 10 ms grid.
+    """Sliding ECAPA embeddings on each emb-hop, held onto the 10 ms grid.
 
     Returns (n_frames, 192). We compute one embedding per `emb_hop_s` (coarse) and
     repeat it across the fine frames it covers (ROADMAP §3: hold the coarse
-    embedding across the fine grid).
+    embedding across the fine grid). Padding decides the window placement: either
+    way `padded[c : c+win]` is one window per coarse center c — centered on c
+    (offline) or ending at c (trailing / streaming, zero lookahead).
     """
     win = int(cfg.emb_win_s * SR)
     hop = int(cfg.emb_hop_s * SR)
     half = win // 2
-    padded = np.pad(wav, (half, half))  # so a centered window exists at every center
+    if cfg.emb_mode == "trailing":
+        padded = np.pad(wav, (win, 0))       # window ENDS at sample c
+    else:
+        padded = np.pad(wav, (half, half))   # window centered on sample c
 
     grid_centers = (np.arange(n_frames) * LABEL_HOP + LABEL_HOP // 2)
     out = np.zeros((n_frames, 192), dtype=np.float32)

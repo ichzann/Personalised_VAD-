@@ -9,14 +9,22 @@ Architecture (kept deliberately small + explainable, ROADMAP §8):
 
     mel (T,40) --1D Conv over FREQUENCY (per frame)--> m[t] (T,64)   <- overlap cue (§3-B)
     e[t] (T,192) --Linear proj--> (T,32)                             <- speaker identity
-    s[t] (T,1), p_speech[t] (T,1)                                    <- comparison + speech
-    x[t] = concat[ m[t], proj(e[t]), s[t], p_speech[t] ]  (T,98)
-    x[t] --> BiLSTM (the temporal model) --> Linear --> 4-class logits per frame
+    |e[t]-e_target| (T,192) --Linear proj--> (T,32)                  <- per-dim comparison (§3-A)
+    s[t] (T,1), p_speech[t] (T,1)                                    <- scalar comparison + speech
+    x[t] = concat[ m[t], proj(e[t]), proj(|e[t]-e_target|), s[t], p_speech[t] ]  (T,130)
+    x[t] --> LSTM (the temporal model) --> Linear --> 4-class logits per frame
+
+The `|e[t]-e_target|` branch (ROADMAP §3-A): the scalar cosine s[t] collapses the
+192-d target comparison to one number; the absolute-difference vector keeps the
+per-dimension comparison the scalar throws away and lets the head learn a richer
+similarity than a fixed cosine. We feed BOTH — s[t] is the free, exact summary; the
+projected diff is the detail. e_target is constant over t within a scene, so it only
+earns its place through this interaction, not on its own.
 
 Key constraints honored:
 - The mel conv runs **over frequency within a single frame** (Conv1d on the 40-bin
   axis), so it adds NO temporal lookahead — the exact same code runs offline and
-  streaming (ROADMAP §3 "Mel pathway"). The BiLSTM does all temporal modeling.
+  streaming (ROADMAP §3 "Mel pathway"). The LSTM does all temporal modeling.
 - Plain `Conv1d`, a few filters, 2 layers. No 2D convs, no MobileNet tricks (§8).
 - Mel standardization stats are stored as buffers so a saved model is self-contained.
 """
@@ -58,16 +66,27 @@ class MelFreqConv(nn.Module):
 class PersonalVAD(nn.Module):
     """Mel pathway + embedding projection + LSTM + per-frame 4-class classifier."""
 
-    def __init__(self, emb_proj_dim: int = 32, lstm_hidden: int = 64,
-                 mel_filters: int = 8):
+    def __init__(self, emb_proj_dim: int = 32, diff_proj_dim: int = 32,
+                 lstm_hidden: int = 64, mel_filters: int = 8,
+                 bidirectional: bool = False):
         super().__init__()
+        self.bidirectional = bidirectional
         self.mel_conv = MelFreqConv(n_filters=mel_filters)
         self.emb_proj = nn.Sequential(nn.Linear(EMB_DIM, emb_proj_dim), nn.ReLU())
+        # Comparison branch: project |e[t]-e_target| (per-dim similarity, §3-A).
+        self.diff_proj = nn.Sequential(nn.Linear(EMB_DIM, diff_proj_dim), nn.ReLU())
 
-        # x[t] = [ m[t] , proj(e[t]) , s[t] , p_speech[t] ]
-        in_dim = self.mel_conv.out_dim + emb_proj_dim + 1 + 1
-        self.lstm = nn.LSTM(in_dim, lstm_hidden, batch_first=True, bidirectional=False)
-        self.classifier = nn.Linear(lstm_hidden, N_CLASSES)   # unidirectional -> hidden (not 2*hidden)
+        # x[t] = [ m[t] , proj(e[t]) , proj(|e[t]-e_target|) , s[t] , p_speech[t] ]
+        in_dim = self.mel_conv.out_dim + emb_proj_dim + diff_proj_dim + 1 + 1
+        # BiLSTM for offline Phase 4 (past+future context). The live/streaming demo
+        # (Phase 7) must build with bidirectional=False so step() stays causal.
+        # Default is a plain unidirectional (causal) LSTM so the offline model and
+        # the live/streaming demo (Phase 7) share one architecture and step() matches
+        # a full forward(). Pass bidirectional=True to use past+future context offline.
+        self.lstm = nn.LSTM(in_dim, lstm_hidden, batch_first=True,
+                            bidirectional=bidirectional)
+        lstm_out = lstm_hidden * (2 if bidirectional else 1)   # BiLSTM concats both dirs
+        self.classifier = nn.Linear(lstm_out, N_CLASSES)
 
         # Mel standardization (set from train stats before training, ROADMAP: cache
         # features; here we just normalize them). Buffers travel with the checkpoint.
@@ -78,11 +97,29 @@ class PersonalVAD(nn.Module):
         self.mel_mean.copy_(mean)
         self.mel_std.copy_(std.clamp_min(1e-6))
 
-    def forward(self, mel, emb, cos, vad):
-        """mel (B,T,40), emb (B,T,192), cos (B,T), vad (B,T) -> logits (B,T,4)."""
+    def forward(self, mel, emb, cos, vad, e_target):
+        """mel (B,T,40), emb (B,T,192), cos (B,T), vad (B,T), e_target (B,192) -> (B,T,4)."""
+        logits, _ = self.step(mel, emb, cos, vad, e_target)
+        return logits
+
+    def step(self, mel, emb, cos, vad, e_target, state=None):
+        """Streaming step: forward(), but the LSTM state is passed in and returned.
+
+        Only a causal (bidirectional=False, the default) head streams correctly:
+        feeding the dialog in 0.25 s hops while carrying `state` produces the SAME
+        outputs as one big forward() over the whole sequence (live demo / ROADMAP §6
+        Phase 7). If built with bidirectional=True the backward pass needs future
+        frames, so chunked stepping does NOT match a full forward. Shapes as
+        forward(); returns (logits, state).
+        """
         mel = (mel - self.mel_mean) / self.mel_std
         m = self.mel_conv(mel)                     # (B,T,64)
         e = self.emb_proj(emb)                     # (B,T,32)
-        x = torch.cat([m, e, cos.unsqueeze(-1), vad.unsqueeze(-1)], dim=-1)
-        h, _ = self.lstm(x)                        # (B,T,hidden)  unidirectional
-        return self.classifier(h)                  # (B,T,4)
+        # Per-dim comparison to the enrollment: |e[t]-e_target|, broadcast over time.
+        # e_target is one vector per scene (constant over t); it enters only here.
+        if e_target.dim() == 1:
+            e_target = e_target.unsqueeze(0)       # (192,) -> (1,192)
+        d = self.diff_proj((emb - e_target.unsqueeze(1)).abs())   # (B,T,32)
+        x = torch.cat([m, e, d, cos.unsqueeze(-1), vad.unsqueeze(-1)], dim=-1)
+        h, state = self.lstm(x, state)             # (B,T, hidden * directions)
+        return self.classifier(h), state           # (B,T,4)

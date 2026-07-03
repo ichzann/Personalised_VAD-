@@ -47,7 +47,7 @@ def evaluate(model, val_dataset) -> "FrameMetrics":
         for i in range(len(val_dataset)):
             s = val_dataset[i]
             logits = model(s["mel"][None], s["emb"][None],
-                           s["cos"][None], s["vad"][None])
+                           s["cos"][None], s["vad"][None], s["e_target"][None])
             pred = logits[0].argmax(-1)                  # (T,) 4-class
             true_pos.append((s["labels"] == TARGET_ONLY).numpy())
             pred_pos.append((pred == TARGET_ONLY).numpy())
@@ -67,7 +67,7 @@ def baseline_on_val(val_dir: Path) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--epochs", type=int, default=20)
+    ap.add_argument("--epochs", type=int, default=30)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--patience", type=int, default=5, help="early-stop patience")
     ap.add_argument("--seed", type=int, default=0)
@@ -117,7 +117,7 @@ def main() -> None:
             s = train_ds[int(idx)]
             optimizer.zero_grad()
             logits = model(s["mel"][None], s["emb"][None],
-                           s["cos"][None], s["vad"][None])   # (1,T,4)
+                           s["cos"][None], s["vad"][None], s["e_target"][None])  # (1,T,4)
             loss = loss_fn(logits.reshape(-1, 4), s["labels"].reshape(-1))
             loss.backward()
             optimizer.step()

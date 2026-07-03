@@ -35,6 +35,7 @@ class SceneFeatureDataset:
             "cos": torch.from_numpy(d["cos"]).float(),        # (T,)
             "vad": torch.from_numpy(d["vad"]).float(),        # (T,)
             "labels": torch.from_numpy(d["labels"]).long(),   # (T,)
+            "e_target": torch.from_numpy(d["e_target"]).float(),  # (192,) enrollment
         }
 
 

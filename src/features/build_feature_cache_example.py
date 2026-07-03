@@ -21,7 +21,8 @@ import numpy as np
 from tqdm import tqdm
 
 from src.features.extract_features_example import (
-    extract_scene_features, load_embedder, load_vad_model, save_features,
+    FeatureConfig, extract_scene_features, load_embedder, load_vad_model,
+    save_features,
 )
 from src.synth.speaker_splits_example import load_splits
 from src.synth.synthesize_scene_example import synthesize_scene
@@ -57,16 +58,24 @@ def noise_splits(noise_dir: Path = NOISE_DIR, seed: int = NOISE_SPLIT_SEED) -> d
 
 
 def build_split(split: str, n_scenes: int, overwrite: bool = False,
-                noisy: bool = False) -> list[Path]:
+                noisy: bool = False, trailing: bool = False) -> list[Path]:
     """Synthesize + cache `n_scenes` feature bundles for one split. Returns the paths.
 
     `noisy=True` mixes a held-out FSD50K noise bed into every scene (Phase 5) and
     writes to `data/features_noisy/<split>` so the clean cache is untouched. Scenes
     use the same seeds as the clean cache, so the two differ only by the noise bed.
+
+    `trailing=True` uses TRAILING embedding windows (no lookahead — what the live
+    demo / streaming sees, ROADMAP §6 Phase 7) and appends `_trailing` to the output
+    dir. A head meant to run live must be trained on a trailing cache.
     """
     splits = load_splits()
     speakers = splits[split]
-    out_dir = (FEATURES_NOISY_DIR if noisy else FEATURES_DIR) / split
+    out_root = FEATURES_NOISY_DIR if noisy else FEATURES_DIR
+    if trailing:
+        out_root = out_root.with_name(out_root.name + "_trailing")
+    out_dir = out_root / split
+    cfg = FeatureConfig(emb_mode="trailing" if trailing else "centered")
     base = SPLIT_SEED_BASE[split]
     noise_files = noise_splits()[split] if noisy else None
     if noisy:
@@ -84,7 +93,7 @@ def build_split(split: str, n_scenes: int, overwrite: bool = False,
             paths.append(out_path)
             continue
         wav, labels, meta = synthesize_scene(seed, speakers, noise_files=noise_files)
-        bundle = extract_scene_features(wav, labels, meta, embedder, vad_model)
+        bundle = extract_scene_features(wav, labels, meta, embedder, vad_model, cfg)
         save_features(bundle, out_path)
         paths.append(out_path)
     return paths
@@ -97,11 +106,14 @@ def main() -> None:
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--noisy", action="store_true",
                     help="mix a held-out FSD50K noise bed (Phase 5); writes to data/features_noisy/")
+    ap.add_argument("--trailing", action="store_true",
+                    help="trailing (no-lookahead) embedding windows for the live demo "
+                         "(Phase 7); writes to data/features[_noisy]_trailing/")
     args = ap.parse_args()
 
-    paths = build_split(args.split, args.n, args.overwrite, noisy=args.noisy)
-    out_root = FEATURES_NOISY_DIR if args.noisy else FEATURES_DIR
-    print(f"\ncached {len(paths)} {args.split} scenes -> {out_root / args.split}")
+    paths = build_split(args.split, args.n, args.overwrite,
+                        noisy=args.noisy, trailing=args.trailing)
+    print(f"\ncached {len(paths)} {args.split} scenes -> {paths[0].parent}")
 
 
 if __name__ == "__main__":

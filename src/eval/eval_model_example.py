@@ -45,7 +45,8 @@ def predict_all(model, dataset):
     with torch.no_grad():
         for i in range(len(dataset)):
             s = dataset[i]
-            logits = model(s["mel"][None], s["emb"][None], s["cos"][None], s["vad"][None])
+            logits = model(s["mel"][None], s["emb"][None], s["cos"][None],
+                           s["vad"][None], s["e_target"][None])
             preds.append(logits[0].argmax(-1).numpy())
             truths.append(s["labels"].numpy())
     return np.concatenate(preds), np.concatenate(truths)

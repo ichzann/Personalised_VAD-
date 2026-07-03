@@ -320,6 +320,7 @@ src/
   features/      # Phase 2 frozen-backbone feature extraction
   models/        # Phase 4 LSTM head + 1D-CNN mel pathway
   eval/          # metrics, baseline, plots
+  demo/          # Phase 6/7 live mic demo (enrollment + streaming detection)
 notebooks/       # exploration (dataset.ipynb lives here conceptually)
 ROADMAP.md       # this file
 CLAUDE.md        # short pointer + hard constraints for LLMs

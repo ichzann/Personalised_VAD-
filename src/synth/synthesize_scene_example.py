@@ -48,7 +48,10 @@ class SceneConfig:
     tir_db_range: tuple = (-12.0, 12.0)     # target-to-interferer ratio (§3-C dial)
     target_turn_prob: float = 0.5           # how often the target takes a turn
     ref_rms: float = 0.06                   # each utterance normalized to this RMS
-    snr_db_range: tuple = (5.0, 20.0)       # speech-to-noise ratio when a bed is added (Phase 5)
+    snr_db_range: tuple = (5.0, 40.0)       # speech-to-noise ratio when a bed is added (Phase 5).
+    # Wide span on purpose (ROADMAP §7 multi-condition): 5 dB = loud noise (hardest),
+    # ~40 dB = faint quiet-room tone (nearly clean). Keeps the loud end for robustness
+    # while adding a near-silent tail so the head also sees the low/no-noise regime.
     noise_crossfade_s: float = 0.1          # crossfade when concatenating short noise clips
     n_enroll: int = 20                      # target utterances reserved for enrollment
     # Energy trim: keep frames within TRIM_DB of the utterance's peak RMS.
