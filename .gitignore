@@ -5,14 +5,19 @@
 wav48/
 fsd50k_data/
 
-# Generated scenes, cached features, resampled 16 kHz audio (ROADMAP §9)
-data/
+# Generated scenes, cached features, resampled 16 kHz audio (ROADMAP §9).
+# Ignore everything under data/ EXCEPT the final trained weights in
+# data/models/*.pt, which we DO ship in the repo (they are tiny).
+data/*
+!data/models/
+data/models/*
+!data/models/*.pt
 
 # Python junk
 __pycache__/
 *.pyc
 .DS_Store
 
-# Model checkpoints
+# Training checkpoints (Lightning etc.). NOTE: no blanket *.pt here — the
+# final trained weights in data/models/*.pt are intentionally committed above.
 *.ckpt
-*.pt
