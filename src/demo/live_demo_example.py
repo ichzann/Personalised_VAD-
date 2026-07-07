@@ -157,8 +157,11 @@ class StreamingDetector:
         else:
             self._consec = 0
 
+        # emb (the trailing 192-d ECAPA embedding for this hop) is surfaced for the
+        # optional live embedding-map viz (src/demo/live_viz_example.py). Detection
+        # itself ignores it, so this is the only hook the visualizer needs.
         return {"t": abs_end / SR, "on": self.on, "frac": frac,
-                "cos": cos, "cls": majority}
+                "cos": cos, "cls": majority, "emb": emb}
 
     def push(self, samples: np.ndarray) -> list[dict]:
         """Add new audio; returns one decision per completed hop (possibly none)."""

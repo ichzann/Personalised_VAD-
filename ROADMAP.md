@@ -309,7 +309,7 @@ same sentences — avoid pairing identical sentence text across target/interfere
   measured gain.
 - Don't expect the VAD to separate speakers; it only gates speech vs silence.
 - Don't compute a single global embedding for the dialog — it must be per-window.
-- Don't evaluate on utterance-level splits or commit the HF token.
+- Don't evaluate on utterance-level splits or commit the HF  token.
 
 ## 9. Repo layout (target — create as phases need them)
 
