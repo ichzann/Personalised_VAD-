@@ -9,6 +9,9 @@ literature calls **Personal VAD / Target-Speaker Voice Activity Detection**.
 See `ROADMAP.md` for the full design rationale and decisions.
 
 ---
+## Created Data Set 
+
+![Structure of the Data Synthiser](vad_datensatz_synthese_pipeline.svg)
 
 ## Model architecture
 
