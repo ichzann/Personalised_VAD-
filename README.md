@@ -13,6 +13,11 @@ See `ROADMAP.md` for the full design rationale and decisions.
 
 ![Structure of the Data Synthiser](vad_datensatz_synthese_pipeline.svg)
 
+
+## Results in Action
+
+![Live PCA Plotting](image.png)
+
 ## Model architecture
 
 Only a **small head is trained**. The heavy pretrained models are frozen and used just
